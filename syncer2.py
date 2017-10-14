@@ -62,7 +62,11 @@ def dropbox_changes(dbx, old_cursor):
     print("Dropbox changes called")
     changes = dbx.files_list_folder_continue(old_cursor)
     print("Changes: ", changes.entries)
+
+    any_changes = False
+
     if len(changes.entries) > 0:
+        any_changes = True
         for e in changes.entries:
             file_path = str(".") + str(e.path_display) #########
             print ("Filepath: ", file_path) 
@@ -100,7 +104,7 @@ def dropbox_changes(dbx, old_cursor):
                 print("Could upload or download (error with API ?")
 
     # return the latest cursor
-    return get_current_cursor(dbx)
+    return get_current_cursor(dbx), any_changes
 
 def get_current_cursor(dbx):
     a = dbx.files_list_folder_get_latest_cursor("/testfolder") ##########
@@ -116,45 +120,51 @@ def download_file(dbx, path):
     print(len(data), 'bytes; md:', md)
     return data
 
+def client_changes(dbx, diff1, diff2):
+    print("client changes")
+    # just the newly added files
+    diffs = compute_diff(diff1, diff2)
+    changes = False
+    
+    for f in diffs['created']:
+        file_name = f
+        file_path = "./testfolder/" + str(file_name)
+        with open(file_path, 'rb') as file:
+            dp_path = "/testfolder/" + str(file_name)
+            print("path dbx: ", dp_path)
+            dbx.files_upload(file.read(), dp_path , mute=True)
+        changes = True
+    for f in diffs['deleted']:
+        print("deleted: ", f)
+        dbx.files_delete("/testfolder/" + str(f))
+
+        changes = True
+    return changes
+
+
+
 def main():
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
 
     cursor = get_current_cursor(dbx)
+    dir_id = compute_dir_index("./testfolder")
     time.sleep(5)
     while True:
-        cursor = dropbox_changes(dbx, cursor)
-        time.sleep(10)
-
-'''
-def main():
-    
-    # check if anything updated on Dropbox
-
-    # always be your root folder on Dropbox
-    folder = "./testfolder"
-
-    # get the current snapshot
-    snap_old = compute_dir_index(folder)
-    while True:
-        time.sleep(10)
-        snap_new = compute_dir_index(folder)
-        diff = compute_diff(snap_new, snap_old)
-        print("diff: ", diff)
-        changes = False
-        for key in diff:
-            if len(diff[key]) != 0:
-                changes = True
-                snap_old = snap_new
-                break
+        cursor, changes = dropbox_changes(dbx, cursor)
         if changes:
-            # do a task
-            print("detected a change")
-            # reflect these changes on dropbox
+            # we made changes to the client, get new index
+            dir_id = compute_dir_index("./testfolder")
+        time.sleep(5)
+        curr_dir_id = compute_dir_index("./testfolder")
+        
+        # scan for changes
+        if client_changes(dbx, curr_dir_id, dir_id):
+            # we have updates dropbox get new snapshot
+            cursor = get_current_cursor(dbx)
+        dir_id = curr_dir_id
+        time.sleep(5)
 
-            #delete from dropbox
-            # push to dropbox
-
-'''
+### TODO: store the cursor and exit and use that initially as old cursor
 if __name__=="__main__":
     main()

@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python
 from __future__ import print_function
 
@@ -10,6 +9,8 @@ import six
 import sys
 import time
 import unicodedata
+
+# https://www.dropboxforum.com/t5/API-support/Deleted-files-metadata/td-p/213170
 
 if sys.version.startswith('2'):
     input = raw_input  # noqa: E501,F821; pylint: disable=redefined-builtin,undefined-variable,useless-suppression
