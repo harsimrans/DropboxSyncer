@@ -9,13 +9,8 @@ import six
 import sys
 import time
 import unicodedata
-
-# https://www.dropboxforum.com/t5/API-support/Deleted-files-metadata/td-p/213170
-
-if sys.version.startswith('2'):
-    input = raw_input  # noqa: E501,F821; pylint: disable=redefined-builtin,undefined-variable,useless-suppression
-
 import dropbox
+import time
 
 def read_access_token(token_file='access_token_file'):
     """ Extracts the access token from an external file 
@@ -29,257 +24,147 @@ def read_access_token(token_file='access_token_file'):
 # OAuth2 access token.
 TOKEN = read_access_token()
 
-
-
-parser = argparse.ArgumentParser(description='Sync ~/Downloads to Dropbox')
-#parser.add_argument('folder', nargs='?', default='Downloads',
-#                    help='Folder name in your Dropbox')
-parser.add_argument('rootdir', nargs='?', default='~/Desktop',
-                    help='Local directory to upload')
-parser.add_argument('--token', default=TOKEN,
-                    help='Access token '
-                    '(see https://www.dropbox.com/developers/apps)')
-parser.add_argument('--yes', '-y', action='store_true',
-                    help='Answer yes to all questions')
-parser.add_argument('--no', '-n', action='store_true',
-                    help='Answer no to all questions')
-parser.add_argument('--default', '-d', action='store_true',
-                    help='Take default answer on all questions')
-
-def main():
-    """Main program.
-
-    Parse command line, then iterate over files and directories under
-    rootdir and upload all files.  Skips some temporary files and
-    directories, and avoids duplicate uploads by comparing size and
-    mtime with the server.
+def compute_dir_index(path):
+    """ Return a tuple containing:
+    - list of files (relative to path)
+    - lisf of subdirs (relative to path)
+    - a dict: filepath => last 
     """
-    args = parser.parse_args()
-    rootdir = args.rootdir
-    folder = rootdir.split("/")[-1] # we'll have the same name on Dropbox as well
-    print("folder: ", folder)
+    files = []
+    subdirs = []
 
-    rootdir = os.path.expanduser(args.rootdir)
-    print('Dropbox folder name:', folder)
-    print('Local directory:', rootdir)
-    if not os.path.exists(rootdir):
-        print(rootdir, 'does not exist on your filesystem')
-        sys.exit(1)
-    elif not os.path.isdir(rootdir):
-        print(rootdir, 'is not a folder on your filesystem')
-        sys.exit(1)
+    for root, dirs, filenames in os.walk(path):
+        for subdir in dirs:
+            subdirs.append(os.path.relpath(os.path.join(root, subdir), path))
 
-    first_time = True
-
-    # create a dropbox client instance
-    dbx = dropbox.Dropbox(args.token)
-
-    while True:
-        if not first_time and check_folder_changed(dbx, folder):
-            continue
-
-        first_time = False
-
-        if sum([bool(b) for b in (args.yes, args.no, args.default)]) > 1:
-            print('At most one of --yes, --no, --default is allowed')
-            sys.exit(2)
-        if not args.token:
-            print('--token is mandatory')
-            sys.exit(2)
-
+        for f in filenames:
+            files.append(os.path.relpath(os.path.join(root, f), path))
         
-        dbx = dropbox.Dropbox(args.token)
+    index = {}
+    for f in files:
+        index[f] = os.path.getmtime(os.path.join(path, f))
 
-        for dn, dirs, files in os.walk(rootdir):
-            subfolder = dn[len(rootdir):].strip(os.path.sep)
-            listing = list_folder(dbx, folder, subfolder)
-            print('Descending into', subfolder, '...')
+    return dict(files=files, subdirs=subdirs, index=index)
 
-            # First do all the files.
-            for name in files:
-                fullname = os.path.join(dn, name)
-                if not isinstance(name, six.text_type):
-                    name = name.decode('utf-8')
-                nname = unicodedata.normalize('NFC', name)
-                if name.startswith('.'):
-                    print('Skipping dot file:', name)
-                elif name.startswith('@') or name.endswith('~'):
-                    print('Skipping temporary file:', name)
-                elif name.endswith('.pyc') or name.endswith('.pyo'):
-                    print('Skipping generated file:', name)
-                elif nname in listing:
-                    md = listing[nname]
-                    mtime = os.path.getmtime(fullname)
-                    mtime_dt = datetime.datetime(*time.gmtime(mtime)[:6])
-                    size = os.path.getsize(fullname)
-                    if (isinstance(md, dropbox.files.FileMetadata) and
-                            mtime_dt == md.client_modified and size == md.size):
-                        print(name, 'is already synced [stats match]')
-                    else:
-                        print(name, 'exists with different stats, downloading')
-                        res = download(dbx, folder, subfolder, name)
-                        with open(fullname) as f:
+def compute_diff(dir_base, dir_cmp):
+    data = {}
+    data['deleted'] = list(set(dir_cmp['files']) - set(dir_base['files']))
+    data['created'] = list(set(dir_base['files']) - set(dir_cmp['files']))
+    data['updated'] = []
+    data['deleted_dirs'] = list(set(dir_cmp['subdirs']) - set(dir_base['subdirs']))
+
+    for f in set(dir_cmp['files']).intersection(set(dir_base['files'])):
+        if dir_base['index'][f] != dir_cmp['index'][f]:
+            data['updated'].append(f)
+    return data
+
+def dropbox_changes(dbx, old_cursor):
+    print("Dropbox changes called")
+    changes = dbx.files_list_folder_continue(old_cursor)
+    print("Changes: ", changes.entries)
+
+    any_changes = False
+
+    if len(changes.entries) > 0:
+        any_changes = True
+        for e in changes.entries:
+            file_path = str(".") + str(e.path_display) #########
+            print ("Filepath: ", file_path) 
+            print("Processing file: ", e.path_display)
+            if type(e) == dropbox.files.DeletedMetadata:
+                os.remove(file_path)
+            elif type(e) == dropbox.files.FileMetadata:
+                if os.path.isfile(file_path):
+                    # compare the time stamps
+                    print ("mtime: ", os.stat(file_path).st_mtime)
+                    t = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(os.path.getmtime(file_path))))
+                    print("time time :", t)
+                    t = datetime.datetime.strptime(t, '%Y-%m-%d %H:%M:%S')
+                    if t <= e.server_modified:
+                        print(file_path, 'exists with different stats, downloading')
+                        res = download_file(dbx, e.path_display)
+                        with open(file_path) as f:
                             data = f.read()
                         if res == data:
-                            print(name, 'is already synced [content match]')
-                        else:
-                            print(name, 'has changed since last sync')
-                            if yesno('Refresh %s' % name, False, args):
-                                upload(dbx, fullname, folder, subfolder, name,
-                                       overwrite=True)
-                elif yesno('Upload %s' % name, True, args):
-                    upload(dbx, fullname, folder, subfolder, name)
-
-            # Then choose which subdirectories to traverse.
-            keep = []
-            for name in dirs:
-                if name.startswith('.'):
-                    print('Skipping dot directory:', name)
-                elif name.startswith('@') or name.endswith('~'):
-                    print('Skipping temporary directory:', name)
-                elif name == '__pycache__':
-                    print('Skipping generated directory:', name)
-                elif yesno('Descend into %s' % name, True, args):
-                    print('Keeping directory:', name)
-                    keep.append(name)
+                           print(name, 'is already synced [content match]')
+                        else: # write this file
+                            f=open(file_path,'w')
+                            f.write(res)
+                            f.close();
+                    else:
+                        with open(file_path, "rb") as f:
+                            dbx.files_upload(f.read(), e.path_display, mute=True)
                 else:
-                    print('OK, skipping directory:', name)
-            dirs[:] = keep
+                    # download the file
+                    res = download_file(dbx, e.path_display)
+                    f=open(file_path,'w')
+                    f.write(res)
+                    f.close();
+            else:
+                print("Could upload or download (error with API ?")
 
-def check_folder_changed(dbx, folder="", timeout=30):
-    """ Checks if the contents of a folder have changed
+    # return the latest cursor
+    return get_current_cursor(dbx), any_changes
 
-    Return True if contents have changed else False
-    """
+def get_current_cursor(dbx):
+    a = dbx.files_list_folder_get_latest_cursor("/testfolder") ##########
+    return a.cursor
 
-    # obtain the cursor aka snapshot of the folder at current time
-    curr_snapshot = dbx.files_list_folder_get_latest_cursor("/"+folder)
-
-    # now check for updates and wait for some timeperiod
-    if dbx.files_list_folder_longpoll(curr_snapshot.cursor, timeout).changes:
-        return True
-    return False
-
-
-def list_folder(dbx, folder, subfolder):
-    """List a folder.
-
-    Return a dict mapping unicode filenames to
-    FileMetadata|FolderMetadata entries.
-    """
-    path = '/%s/%s' % (folder, subfolder.replace(os.path.sep, '/'))
-    while '//' in path:
-        path = path.replace('//', '/')
-    path = path.rstrip('/')
+def download_file(dbx, path):
     try:
-        with stopwatch('list_folder'):
-            res = dbx.files_list_folder(path)
-    except dropbox.exceptions.ApiError as err:
-        print('Folder listing failed for', path, '-- assumed empty:', err)
-        return {}
-    else:
-        rv = {}
-        for entry in res.entries:
-            rv[entry.name] = entry
-        return rv
-
-def download(dbx, folder, subfolder, name):
-    """Download a file.
-
-    Return the bytes of the file, or None if it doesn't exist.
-    """
-    path = '/%s/%s/%s' % (folder, subfolder.replace(os.path.sep, '/'), name)
-    while '//' in path:
-        path = path.replace('//', '/')
-    with stopwatch('download'):
-        try:
-            md, res = dbx.files_download(path)
-        except dropbox.exceptions.HttpError as err:
-            print('*** HTTP error', err)
-            return None
+        md, res = dbx.files_download(path)
+    except dropbox.exceptions.HttpError as err:
+        print('*** HTTP error', err)
+        return None
     data = res.content
     print(len(data), 'bytes; md:', md)
     return data
 
-def upload(dbx, fullname, folder, subfolder, name, overwrite=False):
-    """Upload a file.
+def client_changes(dbx, diff1, diff2):
+    print("client changes")
+    # just the newly added files
+    diffs = compute_diff(diff1, diff2)
+    changes = False
+    
+    for f in diffs['created']:
+        file_name = f
+        file_path = "./testfolder/" + str(file_name)
+        with open(file_path, 'rb') as file:
+            dp_path = "/testfolder/" + str(file_name)
+            print("path dbx: ", dp_path)
+            dbx.files_upload(file.read(), dp_path , mute=True)
+        changes = True
+    for f in diffs['deleted']:
+        print("deleted: ", f)
+        dbx.files_delete("/testfolder/" + str(f))
 
-    Return the request response, or None in case of error.
-    """
-    path = '/%s/%s/%s' % (folder, subfolder.replace(os.path.sep, '/'), name)
-    while '//' in path:
-        path = path.replace('//', '/')
-    mode = (dropbox.files.WriteMode.overwrite
-            if overwrite
-            else dropbox.files.WriteMode.add)
-    mtime = os.path.getmtime(fullname)
-    with open(fullname, 'rb') as f:
-        data = f.read()
-    with stopwatch('upload %d bytes' % len(data)):
-        try:
-            res = dbx.files_upload(
-                data, path, mode,
-                client_modified=datetime.datetime(*time.gmtime(mtime)[:6]),
-                mute=True)
-        except dropbox.exceptions.ApiError as err:
-            print('*** API error', err)
-            return None
-    print('uploaded as', res.name.encode('utf8'))
-    return res
+        changes = True
+    return changes
 
-def yesno(message, default, args):
-    """Handy helper function to ask a yes/no question.
 
-    Command line arguments --yes or --no force the answer;
-    --default to force the default answer.
 
-    Otherwise a blank line returns the default, and answering
-    y/yes or n/no returns True or False.
+def main():
+    # create a dropbox client instance
+    dbx = dropbox.Dropbox(TOKEN)
 
-    Retry on unrecognized answer.
-
-    Special answers:
-    - q or quit exits the program
-    - p or pdb invokes the debugger
-    """
-    if args.default:
-        print(message + '? [auto]', 'Y' if default else 'N')
-        return default
-    if args.yes:
-        print(message + '? [auto] YES')
-        return True
-    if args.no:
-        print(message + '? [auto] NO')
-        return False
-    if default:
-        message += '? [Y/n] '
-    else:
-        message += '? [N/y] '
+    cursor = get_current_cursor(dbx)
+    dir_id = compute_dir_index("./testfolder")
+    time.sleep(5)
     while True:
-        answer = input(message).strip().lower()
-        if not answer:
-            return default
-        if answer in ('y', 'yes'):
-            return True
-        if answer in ('n', 'no'):
-            return False
-        if answer in ('q', 'quit'):
-            print('Exit')
-            raise SystemExit(0)
-        if answer in ('p', 'pdb'):
-            import pdb
-            pdb.set_trace()
-        print('Please answer YES or NO.')
+        cursor, changes = dropbox_changes(dbx, cursor)
+        if changes:
+            # we made changes to the client, get new index
+            dir_id = compute_dir_index("./testfolder")
+        time.sleep(5)
+        curr_dir_id = compute_dir_index("./testfolder")
+        
+        # scan for changes
+        if client_changes(dbx, curr_dir_id, dir_id):
+            # we have updates dropbox get new snapshot
+            cursor = get_current_cursor(dbx)
+        dir_id = curr_dir_id
+        time.sleep(5)
 
-@contextlib.contextmanager
-def stopwatch(message):
-    """Context manager to print how long a block of code took."""
-    t0 = time.time()
-    try:
-        yield
-    finally:
-        t1 = time.time()
-        print('Total elapsed time for %s: %.3f' % (message, t1 - t0))
-
-if __name__ == '__main__':
+### TODO: store the cursor and exit and use that initially as old cursor
+if __name__=="__main__":
     main()
