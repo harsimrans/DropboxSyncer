@@ -58,7 +58,7 @@ def compute_diff(dir_base, dir_cmp):
             data['updated'].append(f)
     return data
 
-def dropbox_changes(dbx, old_cursor):
+def dropbox_changes(dbx, old_cursor, folder, db_folder):
     print("Dropbox changes called")
     changes = dbx.files_list_folder_continue(old_cursor)
     print("Changes: ", changes.entries)
@@ -68,7 +68,8 @@ def dropbox_changes(dbx, old_cursor):
     if len(changes.entries) > 0:
         any_changes = True
         for e in changes.entries:
-            file_path = str(".") + str(e.path_display) #########
+
+            file_path = folder + "/" + "/".join(str(e.path_display).split("/")[2:])  #########
             print ("Filepath: ", file_path) 
             print("Processing file: ", e.path_display)
             if type(e) == dropbox.files.DeletedMetadata:
@@ -104,10 +105,10 @@ def dropbox_changes(dbx, old_cursor):
                 print("Could upload or download (error with API ?")
 
     # return the latest cursor
-    return get_current_cursor(dbx), any_changes
+    return get_current_cursor(dbx, db_folder), any_changes
 
-def get_current_cursor(dbx):
-    a = dbx.files_list_folder_get_latest_cursor("/testfolder") ##########
+def get_current_cursor(dbx, db_folder):
+    a = dbx.files_list_folder_get_latest_cursor(db_folder) ##########
     return a.cursor
 
 def download_file(dbx, path):
@@ -120,24 +121,31 @@ def download_file(dbx, path):
     print(len(data), 'bytes; md:', md)
     return data
 
-def client_changes(dbx, diff1, diff2):
+def client_changes(dbx, diff1, diff2, folder, db_folder):
     print("client changes")
     # just the newly added files
     diffs = compute_diff(diff1, diff2)
+    print("diffs: ", diffs)
     changes = False
     
     for f in diffs['created']:
         file_name = f
-        file_path = "./testfolder/" + str(file_name)
+        file_path = os.path.join(folder, str(file_name))
         with open(file_path, 'rb') as file:
-            dp_path = "/testfolder/" + str(file_name)
+            dp_path = db_folder + "/" + str(file_name)
             print("path dbx: ", dp_path)
             dbx.files_upload(file.read(), dp_path , mute=True)
         changes = True
     for f in diffs['deleted']:
         print("deleted: ", f)
-        dbx.files_delete("/testfolder/" + str(f))
+        dbx.files_delete(db_folder + "/" + str(f))
 
+        changes = True
+    for f in diffs['updated']:
+        print("updated: ", f)
+        file_path = folder + "/" + f
+        with open(file_path, "rb") as fname:
+            dbx.files_upload(fname.read(), db_folder + "/" + f, mode=dropbox.files.WriteMode.overwrite, mute=True)
         changes = True
     return changes
 
@@ -146,22 +154,26 @@ def client_changes(dbx, diff1, diff2):
 def main():
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
+    folder = sys.argv[1]
+    print(os.path.abspath(folder))
 
-    cursor = get_current_cursor(dbx)
-    dir_id = compute_dir_index("./testfolder")
+    db_folder = "/" + os.path.abspath(folder).split("/")[-1]
+    print("dropbox folder", db_folder)
+    cursor = get_current_cursor(dbx, db_folder)
+    dir_id = compute_dir_index(folder)
     time.sleep(5)
     while True:
-        cursor, changes = dropbox_changes(dbx, cursor)
+        cursor, changes = dropbox_changes(dbx, cursor, folder, db_folder)
         if changes:
             # we made changes to the client, get new index
-            dir_id = compute_dir_index("./testfolder")
+            dir_id = compute_dir_index(folder)
         time.sleep(5)
-        curr_dir_id = compute_dir_index("./testfolder")
+        curr_dir_id = compute_dir_index(folder)
         
         # scan for changes
-        if client_changes(dbx, curr_dir_id, dir_id):
+        if client_changes(dbx, curr_dir_id, dir_id, folder, db_folder):
             # we have updates dropbox get new snapshot
-            cursor = get_current_cursor(dbx)
+            cursor = get_current_cursor(dbx, db_folder)
         dir_id = curr_dir_id
         time.sleep(5)
 
