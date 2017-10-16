@@ -111,6 +111,13 @@ def get_current_cursor(dbx, db_folder):
     a = dbx.files_list_folder_get_latest_cursor(db_folder) ##########
     return a.cursor
 
+def exists(dbx, path):
+    try:
+        dbx.files_get_metadata(path)
+        return True
+    except:
+        return False
+
 def download_file(dbx, path):
     try:
         md, res = dbx.files_download(path)
@@ -142,10 +149,18 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
 
         changes = True
     for f in diffs['updated']:
-        print("updated: ", f)
+        print("updated: ", f) 
         file_path = folder + "/" + f
         with open(file_path, "rb") as fname:
-            dbx.files_upload(fname.read(), db_folder + "/" + f, mode=dropbox.files.WriteMode.overwrite, mute=True)
+            # check if file present on Dropbox
+            try:
+                if exists(dbx, db_folder + "/" + f):
+                    dbx.files_upload(fname.read(), db_folder + "/" + f, mode=dropbox.files.WriteMode.overwrite, mute=True)
+                else:
+                    dbx.files_upload(fname.read(), db_folder + "/" + f, mute=True)
+            except dropbox.exceptions.ApiError as e:
+                print("Cannot upload file: ", f, " Error: ", str(e))
+
         changes = True
     return changes
 
@@ -154,20 +169,20 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
 def main():
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
-    folder = sys.argv[1]
+    folder = sys.argv[1].strip("/")
     print(os.path.abspath(folder))
-
+    folder = os.path.abspath(folder)
     db_folder = "/" + os.path.abspath(folder).split("/")[-1]
     print("dropbox folder", db_folder)
     cursor = get_current_cursor(dbx, db_folder)
     dir_id = compute_dir_index(folder)
-    time.sleep(5)
+    time.sleep(1)
     while True:
         cursor, changes = dropbox_changes(dbx, cursor, folder, db_folder)
         if changes:
             # we made changes to the client, get new index
             dir_id = compute_dir_index(folder)
-        time.sleep(5)
+        time.sleep(1)
         curr_dir_id = compute_dir_index(folder)
         
         # scan for changes
@@ -175,7 +190,7 @@ def main():
             # we have updates dropbox get new snapshot
             cursor = get_current_cursor(dbx, db_folder)
         dir_id = curr_dir_id
-        time.sleep(5)
+        time.sleep(1)
 
 ### TODO: store the cursor and exit and use that initially as old cursor
 if __name__=="__main__":
