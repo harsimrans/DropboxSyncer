@@ -77,13 +77,17 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
             elif type(e) == dropbox.files.FileMetadata:
                 if os.path.isfile(file_path):
                     # compare the time stamps
-                    print ("mtime: ", os.stat(file_path).st_mtime)
+                    #print ("mtime: ", os.stat(file_path).st_mtime)
                     t = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(os.path.getmtime(file_path))))
-                    print("time time :", t)
+                    #print("time time :", t)
                     t = datetime.datetime.strptime(t, '%Y-%m-%d %H:%M:%S')
                     if t <= e.server_modified:
                         print(file_path, 'exists with different stats, downloading')
-                        res = download_file(dbx, e.path_display)
+                        try:
+                            res = download_file(dbx, e.path_display)
+                        except dropbox.exceptions.ApiError as e:
+                            print("Cannot download file: ", f, " Error: ", str(e))
+
                         with open(file_path) as f:
                             data = f.read()
                         if res == data:
@@ -94,21 +98,28 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
                             f.close();
                     else:
                         with open(file_path, "rb") as f:
-                            dbx.files_upload(f.read(), e.path_display, mute=True)
+                            try:
+                                dbx.files_upload(f.read(), e.path_display, mute=True)
+                            except dropbox.exceptions.ApiError as e:
+                                print("Cannot upload file: ", f, " Error: ", str(e))
                 else:
                     # download the file
-                    res = download_file(dbx, e.path_display)
+                    try:
+                        res = download_file(dbx, e.path_display)
+                    except dropbox.exceptions.ApiError as e:
+                        print("Cannot download file: ", f, " Error: ", str(e))
+
                     f=open(file_path,'w')
                     f.write(res)
                     f.close();
             else:
-                print("Could upload or download (error with API ?")
+                print("Could upload or download (error with API ?)")
 
     # return the latest cursor
     return get_current_cursor(dbx, db_folder), any_changes
 
 def get_current_cursor(dbx, db_folder):
-    a = dbx.files_list_folder_get_latest_cursor(db_folder) ##########
+    a = dbx.files_list_folder_get_latest_cursor(db_folder)
     return a.cursor
 
 def exists(dbx, path):
@@ -141,13 +152,20 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
         with open(file_path, 'rb') as file:
             dp_path = db_folder + "/" + str(file_name)
             print("path dbx: ", dp_path)
-            dbx.files_upload(file.read(), dp_path , mute=True)
+            try:
+                dbx.files_upload(file.read(), dp_path , mute=True)
+            except dropbox.exceptions.ApiError as e:
+                print("Cannot upload file: ", f, " Error: ", str(e))
         changes = True
+
     for f in diffs['deleted']:
         print("deleted: ", f)
-        dbx.files_delete(db_folder + "/" + str(f))
-
+        try:
+            dbx.files_delete(db_folder + "/" + str(f))
+        except dropbox.exceptions.ApiError as e:
+            print("Cannot delete file: ", f, " Error: ", str(e))
         changes = True
+
     for f in diffs['updated']:
         print("updated: ", f) 
         file_path = folder + "/" + f
