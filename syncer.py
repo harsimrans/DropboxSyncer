@@ -126,7 +126,7 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
                     f.close()
             else:
                 print("Could upload or download (error with API ?)")
-    
+
     # return the latest cursor
     return get_current_cursor(dbx, db_folder), any_changes
 
@@ -202,6 +202,18 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
         changes = True
     return changes
 
+def check_folder_exists(dbx, db_folder):
+    try:
+        dbx.files_list_folder_get_latest_cursor(db_folder)
+        return True
+    except dropbox.exceptions.ApiError as e:
+        print(e)
+        if e.error == 'not_found':
+            return False
+
+
+
+
 def main():
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
@@ -210,6 +222,14 @@ def main():
     folder = os.path.abspath(folder)
     db_folder = "/" + os.path.abspath(folder).split("/")[-1]
     print("dropbox folder", db_folder)
+    # check for Dropbox folder
+    print("Checking the folder:::::: ", check_folder_exists(dbx, db_folder))
+    try:
+        print("metadata: ", dbx.files_get_metadata(db_folder))
+    except dropbox.exceptions.ApiError as e:
+        print("creating folder on Dropbox")
+        dbx.files_create_folder(path=db_folder)
+
     cursor = get_current_cursor(dbx, db_folder)
     dir_id = compute_dir_index(folder)
     time.sleep(1)
