@@ -11,6 +11,7 @@ import time
 import unicodedata
 import dropbox
 import time
+import shutil
 
 def read_access_token(token_file='access_token_file'):
     """ Extracts the access token from an external file 
@@ -73,7 +74,12 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
             print ("Filepath: ", file_path) 
             print("Processing file: ", e.path_display)
             if type(e) == dropbox.files.DeletedMetadata:
-                os.remove(file_path)
+                
+                # check if a directory
+                if os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+                else:
+                    os.remove(file_path)
             elif type(e) == dropbox.files.FileMetadata:
                 if os.path.isfile(file_path):
                     # compare the time stamps
@@ -91,7 +97,7 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
                         with open(file_path) as f:
                             data = f.read()
                         if res == data:
-                           print(name, 'is already synced [content match]')
+                           print(file_path, 'is already synced [content match]')
                         else: # write this file
                             f=open(file_path,'w')
                             f.write(res)
@@ -109,17 +115,23 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
                     except dropbox.exceptions.ApiError as e:
                         print("Cannot download file: ", f, " Error: ", str(e))
 
+                    if not os.path.exists(os.path.dirname(file_path)):
+                        try:
+                            os.makedirs(os.path.dirname(file_path))
+                        except OSError as exc: # Guard against race condition
+                            if exc.errno != errno.EEXIST:
+                                raise
                     f=open(file_path,'w')
                     f.write(res)
-                    f.close();
+                    f.close()
             else:
                 print("Could upload or download (error with API ?)")
-
+    
     # return the latest cursor
     return get_current_cursor(dbx, db_folder), any_changes
 
 def get_current_cursor(dbx, db_folder):
-    a = dbx.files_list_folder_get_latest_cursor(db_folder)
+    a = dbx.files_list_folder_get_latest_cursor(db_folder, recursive=True)
     return a.cursor
 
 def exists(dbx, path):
@@ -166,6 +178,14 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
             print("Cannot delete file: ", f, " Error: ", str(e))
         changes = True
 
+    for f in diffs['deleted_dirs']:
+        print("deleted: ", f)
+        try:
+            dbx.files_delete(db_folder + "/" + str(f))
+        except dropbox.exceptions.ApiError as e:
+            print("Cannot delete file: ", f, " Error: ", str(e))
+        changes = True
+
     for f in diffs['updated']:
         print("updated: ", f) 
         file_path = folder + "/" + f
@@ -181,8 +201,6 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
 
         changes = True
     return changes
-
-
 
 def main():
     # create a dropbox client instance
