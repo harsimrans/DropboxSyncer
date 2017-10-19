@@ -124,6 +124,9 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
                     f=open(file_path,'w')
                     f.write(res)
                     f.close()
+            elif type(e) == dropbox.files.FolderMetadata:
+                if not os.path.exists(file_path): ## potential race condition
+                    os.makedirs(file_path)
             else:
                 print("Could upload or download (error with API ?)")
 
