@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 from __future__ import print_function
 
-import argparse
 import contextlib
 import datetime
 import os
@@ -12,6 +11,8 @@ import unicodedata
 import dropbox
 import time
 import shutil
+
+from argparse import ArgumentParser
 
 def read_access_token(token_file='access_token_file'):
     """ Extracts the access token from an external file 
@@ -218,9 +219,16 @@ def check_folder_exists(dbx, db_folder):
 
 
 def main():
+    parser = ArgumentParser()
+    parser.add_argument("-f", "--folder", dest="folder",
+            required=True, type=str,  help="takes folder as an argument")
+
+    args, other_args = parser.parse_known_args()
+
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
-    folder = sys.argv[1].strip("/")
+    #folder = sys.argv[1].strip("/")
+    folder = args.folder
     print(os.path.abspath(folder))
     folder = os.path.abspath(folder)
     db_folder = "/" + os.path.abspath(folder).split("/")[-1]
