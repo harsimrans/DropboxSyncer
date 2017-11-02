@@ -4,7 +4,6 @@ from __future__ import print_function
 import contextlib
 import datetime
 import os
-import six
 import sys
 import time
 import unicodedata
@@ -61,7 +60,7 @@ def compute_diff(dir_base, dir_cmp):
     return data
 
 def dropbox_changes(dbx, old_cursor, folder, db_folder):
-    print("Dropbox changes called")
+    # print("Dropbox changes called")
     changes = dbx.files_list_folder_continue(old_cursor)
     print("Changes: ", changes.entries)
 
@@ -211,10 +210,28 @@ def check_folder_exists(dbx, db_folder):
         dbx.files_list_folder_get_latest_cursor(db_folder)
         return True
     except dropbox.exceptions.ApiError as e:
-        print(e)
         if e.error == 'not_found':
             return False
 
+def upload_folder(dbx, folder,db_folder):
+    for dir_name, dirs, files in os.walk(folder):
+        for file_name in files:
+            try: 
+                new_dir = dir_name[len(folder):]
+                #Create a new folder in the dropbox folder
+                new_folder = db_folder + new_dir
+                try:
+                    metadata =  dbx.files_get_metadata(new_folder)
+                except dropbox.exceptions.ApiError as e:
+                    dbx.files_create_folder(path=new_folder)
+                    
+                file_path = os.path.join(dir_name, file_name)
+                dest_path = os.path.join(new_folder, file_name)  
+                with open(file_path, "rb") as f:
+                    dbx.files_upload(f.read(), dest_path, mute=True)
+            except Exception as e:
+                print("Failed to upload %s" % (file_name))
+    print("Done.")
 
 
 
@@ -227,37 +244,40 @@ def main():
 
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
-    #folder = sys.argv[1].strip("/")
     folder = args.folder
-    print(os.path.abspath(folder))
+
     folder = os.path.abspath(folder)
     db_folder = "/" + os.path.abspath(folder).split("/")[-1]
-    print("dropbox folder", db_folder)
-    # check for Dropbox folder
-    print("Checking the folder:::::: ", check_folder_exists(dbx, db_folder))
+
+    print("Checking the folder::::::", "Not Found" if check_folder_exists(dbx, db_folder) == None  else "Found")
     try:
-        print("metadata: ", dbx.files_get_metadata(db_folder))
+        metadata =  dbx.files_get_metadata(db_folder)
     except dropbox.exceptions.ApiError as e:
         print("creating folder on Dropbox")
         dbx.files_create_folder(path=db_folder)
+        upload_folder(dbx, folder, db_folder)
 
     cursor = get_current_cursor(dbx, db_folder)
     dir_id = compute_dir_index(folder)
     time.sleep(1)
-    while True:
-        cursor, changes = dropbox_changes(dbx, cursor, folder, db_folder)
-        if changes:
-            # we made changes to the client, get new index
-            dir_id = compute_dir_index(folder)
-        time.sleep(1)
-        curr_dir_id = compute_dir_index(folder)
-        
-        # scan for changes
-        if client_changes(dbx, curr_dir_id, dir_id, folder, db_folder):
-            # we have updates dropbox get new snapshot
-            cursor = get_current_cursor(dbx, db_folder)
-        dir_id = curr_dir_id
-        time.sleep(1)
+    try:
+        while True:
+            cursor, changes = dropbox_changes(dbx, cursor, folder, db_folder)
+            if changes:
+                # we made changes to the client, get new index
+                dir_id = compute_dir_index(folder)
+            time.sleep(1)
+            curr_dir_id = compute_dir_index(folder)
+            
+            # scan for changes
+            if client_changes(dbx, curr_dir_id, dir_id, folder, db_folder):
+                # we have updates dropbox get new snapshot
+                cursor = get_current_cursor(dbx, db_folder)
+            dir_id = curr_dir_id
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("Exiting")
+        sys.exit()
 
 ### TODO: store the cursor and exit and use that initially as old cursor
 if __name__=="__main__":
