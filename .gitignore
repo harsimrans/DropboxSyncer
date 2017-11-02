@@ -4,3 +4,4 @@ access_token_file
 Rsync
 dist
 others
+*pyc
