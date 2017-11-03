@@ -5,3 +5,4 @@ Rsync
 dist
 others
 *pyc
+.cache/

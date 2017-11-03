@@ -18,9 +18,14 @@ def read_access_token(token_file='.dbsync_access_token_file'):
 
     Returns the extracted access token
     """
-    f = open(os.path.join(os.path.expanduser('~'),token_file))
-    token = f.readlines()[0]
-    return token
+    try:
+        f = open(os.path.join(os.path.expanduser('~'),token_file))
+        token = f.readlines()[0]
+        return token
+    except:
+        print("Error retrieving token...exiting...")
+        return False
+        sys.exit()
 
 # OAuth2 access token.
 TOKEN = read_access_token()
