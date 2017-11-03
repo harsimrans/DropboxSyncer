@@ -1,0 +1,4 @@
+pyfakefs
+dropbox
+pytest
+pytest-cov
