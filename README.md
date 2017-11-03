@@ -1,3 +1,4 @@
+[![Build Status](https://travis-ci.org/harsimrans/DropboxSyncer.svg?branch=master)](https://github.com/harsimrans/DropboxSyncer)
 
 # DropboxSyncer: RealTime Sync for Dropbox folders
 This tools syncs the folder specified by the user on the personal machine with Dropbox. This sync happens automatically in realtime without any user input. Simply launch the script and get to work, DropboxSyncer will take care of the rest.
