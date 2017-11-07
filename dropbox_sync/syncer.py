@@ -52,6 +52,26 @@ def compute_dir_index(path):
 
     return dict(files=files, subdirs=subdirs, index=index)
 
+def compute_dbdir_index(dbx, db_folder):
+    # print(db_folder)
+    content = dbx.files_list_folder(db_folder, recursive=True)
+
+    files = []
+    subdirs = []
+    index = {}
+    for entry in content.entries:
+        if type(entry) == dropbox.files.FileMetadata:
+            file_name = entry.path_display[len(db_folder) + 1:]
+            files.append(file_name)
+            index[file_name] = entry.server_modified
+        elif type(entry) == dropbox.files.FolderMetadata:
+            folder_name = entry.path_display[len(db_folder) + 1:]
+            
+            if folder_name != '':
+                # print(folder_name)
+                subdirs.append(folder_name)
+    return dict(files=files, subdirs=subdirs, index=index)
+
 def compute_diff(dir_base, dir_cmp):
     data = {}
     data['deleted'] = list(set(dir_cmp['files']) - set(dir_base['files']))
@@ -152,7 +172,7 @@ def download_file(dbx, path):
         print('*** HTTP error', err)
         return None
     data = res.content
-    print(len(data), 'bytes; md:', md)
+    # print(len(data), 'bytes; md:', md)
     return data
 
 def upload_file(dbx, file_path, path):
@@ -167,7 +187,7 @@ def upload_file(dbx, file_path, path):
 
     if file_size <= CHUNK_SIZE:
         try:
-            print(dbx.files_upload(f, path))
+            print(dbx.files_upload(f.read(), path, mode=dropbox.files.WriteMode.overwrite))
         except:
             print("Error uploading file: ", file_path)
 
@@ -176,7 +196,7 @@ def upload_file(dbx, file_path, path):
             upload_session_start_result = dbx.files_upload_session_start(f.read(CHUNK_SIZE))
             cursor = dropbox.files.UploadSessionCursor(session_id=upload_session_start_result.session_id,
                                                        offset=f.tell())
-            commit = dropbox.files.CommitInfo(path=path)
+            commit = dropbox.files.CommitInfo(path=path, mode=dropbox.files.WriteMode.overwrite)
 
             while f.tell() < file_size:
                 if ((file_size - f.tell()) <= CHUNK_SIZE):
@@ -226,16 +246,16 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
     for f in diffs['updated']:
         print("updated: ", f) 
         file_path = folder + "/" + f
-        with open(file_path, "rb") as fname:
-            # check if file present on Dropbox
-            try:
-                if exists(dbx, db_folder + "/" + f):
-                    dbx.files_upload(fname.read(), db_folder + "/" + f, mode=dropbox.files.WriteMode.overwrite, mute=True)
-                else:
-                    dbx.files_upload(fname.read(), db_folder + "/" + f, mute=True)
-            except dropbox.exceptions.ApiError as e:
-                print("Cannot upload file: ", f, " Error: ", str(e))
+        # with open(file_path, "rb") as fname:
+        #     try:
+        #         if exists(dbx, db_folder + "/" + f):
+        #             dbx.files_upload(fname.read(), db_folder + "/" + f, mode=dropbox.files.WriteMode.overwrite, mute=True)
+        #         else:
+        #             dbx.files_upload(fname.read(), db_folder + "/" + f, mute=True)
 
+        #     except dropbox.exceptions.ApiError as e:
+        #         print("Cannot upload file: ", f, " Error: ", str(e))
+        upload_file(dbx, file_path, db_folder + "/" + f)
         changes = True
     return changes
 
@@ -244,6 +264,7 @@ def check_folder_exists(dbx, db_folder):
         dbx.files_list_folder_get_latest_cursor(db_folder)
         return True
     except dropbox.exceptions.ApiError as e:
+        # print(e)
         if e.error == 'not_found':
             return False
 
@@ -261,12 +282,140 @@ def upload_folder(dbx, folder,db_folder):
                     
                 file_path = os.path.join(dir_name, file_name)
                 dest_path = os.path.join(new_folder, file_name)  
-                with open(file_path, "rb") as f:
-                    dbx.files_upload(f.read(), dest_path, mute=True)
+                #with open(file_path, "rb") as f:
+                #    dbx.files_upload(f.read(), dest_path, mute=True)
+                upload_file(dbx, file_path, dest_path)
             except Exception as e:
                 print("Failed to upload %s" % (file_name))
     print("Done.")
 
+def download_folder(dbx, folder, db_folder):
+    print("Downloading folder")
+    os.makedirs(folder)
+    content = dbx.files_list_folder(db_folder, recursive=True)
+
+    for entry in content.entries:
+        f_path = folder + "/" + "/".join(str(entry.path_display).split("/")[2:])
+        if type(entry) == dropbox.files.FolderMetadata and f_path[:-1] != folder:
+            os.makedirs(f_path)
+        elif type(entry) == dropbox.files.FileMetadata:
+            try:
+                res = download_file(dbx, entry.path_display)
+            except dropbox.exceptions.ApiError as e:
+                print("Cannot download file: ", f, " Error: ", str(e))
+            with open(f_path, 'wb') as f:
+                f.write(res)
+                f.close();
+        else:
+            pass
+
+def initial_check(dbx, folder, db_folder):
+    db_folder_exists = check_folder_exists(dbx, db_folder)
+    local_folder_exists = os.path.exists(folder)
+
+    #Check if folder exists on dropbox but not on local machine
+    if db_folder_exists == True and local_folder_exists == False:
+        download_folder(dbx, folder, db_folder)
+    #Check if local for exists but not on dropbox
+    elif db_folder_exists == None and local_folder_exists == True:
+        print("creating folder on Dropbox")
+        dbx.files_create_folder(path=db_folder)
+        upload_folder(dbx, folder, db_folder)
+    #If both exist then merge them
+    elif db_folder_exists == True and local_folder_exists == True:
+        content = compute_dbdir_index(dbx, db_folder)
+        dir_id = compute_dir_index(folder)
+
+        #Download files that exist on dropbox but not locally
+        file_diff = list(set(content['files']) - set(dir_id['files']))
+        for file_name in file_diff:
+            f_path = folder + "/" + file_name
+            print("Downloading {}".format(file_name))
+            if os.path.exists("/".join(str(f_path).split("/")[:-1])) == True:
+                try:
+                    res = download_file(dbx, db_folder + "/" + file_name)
+                except dropbox.exceptions.ApiError as e:
+                    print("Cannot download file: ", f, " Error: ", str(e))
+                with open(f_path, 'wb') as f:
+                    f.write(res)
+                    f.close();
+            else:
+                print("no folder")
+                os.makedirs("/".join(str(f_path).split("/")[:-1]))
+                try:
+                    res = download_file(dbx, db_folder + "/" + file_name)
+                except dropbox.exceptions.ApiError as e:
+                    print("Cannot download file: ", f, " Error: ", str(e))
+                with open(f_path, 'wb') as f:
+                    f.write(res)
+                    f.close();
+
+        #Upload files that exist locally but not on dropbox
+        file_diff = list(set(dir_id['files']) - set(content['files']))
+        for file_name in file_diff:
+            print("Uploading {}".format(file_name))
+            f_path = db_folder + "/" + file_name
+            if check_folder_exists(dbx, "/".join(str(f_path).split("/")[:-1])) == True:
+                try: 
+                    file_path = folder + "/" + file_name
+                    dest_path = f_path
+                    with open(file_path, "rb") as f:
+                        dbx.files_upload(f.read(), dest_path, mute=True)
+                except Exception as e:
+                    print("Failed to upload %s" % (file_name))
+            else:
+                print("no folder")
+                dbx.files_create_folder(path="/".join(str(f_path).split("/")[:-1]))
+                try: 
+                    file_path = folder + "/" + file_name
+                    dest_path = f_path
+                    with open(file_path, "rb") as f:
+                        dbx.files_upload(f.read(), dest_path, mute=True)
+                except Exception as e:
+                    print("Failed to upload %s" % (file_name))
+
+        #For files that exist on both, keep the latest copy of the files on both
+        file_intersect = list(set(content['files']).intersection(set(dir_id['files'])))
+        for file_name in file_intersect:
+            db_time = content['index'][file_name]
+            local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(dir_id['index'][file_name])))
+            local_time = datetime.datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
+            f_path = folder + "/" + file_name
+            if db_time > local_time:
+                # print("Downloading")
+                try:
+                    res = download_file(dbx, db_folder + "/" + file_name)
+                except dropbox.exceptions.ApiError as e:
+                    print("Cannot download file: ", f, " Error: ", str(e))
+                with open(f_path) as f:
+                        data = f.read()
+                if res == data:
+                   print(file_name, 'is already synced [content match]')
+                else:
+                    with open(f_path, 'wb') as f:
+                        f.write(res)
+                        f.close();
+            elif local_time > db_time:
+                # print("Uploading")
+                try: 
+                    file_path = folder + "/" + file_name
+                    dest_path = db_folder + "/" + file_name
+                    try:
+                        res = download_file(dbx, dest_path)
+                    except dropbox.exceptions.ApiError as e:
+                        print("Cannot download file: ", f, " Error: ", str(e))
+                    with open(file_path) as f:
+                            data = f.read()
+                    if res == data:
+                       print(file_name, 'is already synced [content match]')
+                    else:
+                        with open(file_path, "rb") as f:
+                            dbx.files_upload(f.read(), dest_path, mute=True)
+                except Exception as e:
+                    print("Failed to upload %s" % (file_name))
+            else:
+                print("No Change {}".format(file_name))
+                pass
 
 def main():
     parser = ArgumentParser()
@@ -282,16 +431,11 @@ def main():
     folder = os.path.abspath(folder)
     db_folder = "/" + os.path.abspath(folder).split("/")[-1]
 
-    print("Checking the folder::::::", "Not Found" if check_folder_exists(dbx, db_folder) == None  else "Found")
-    try:
-        metadata =  dbx.files_get_metadata(db_folder)
-    except dropbox.exceptions.ApiError as e:
-        print("creating folder on Dropbox")
-        dbx.files_create_folder(path=db_folder)
-        upload_folder(dbx, folder, db_folder)
+    initial_check(dbx, folder, db_folder)
 
     cursor = get_current_cursor(dbx, db_folder)
     dir_id = compute_dir_index(folder)
+
     time.sleep(1)
     try:
         while True:
