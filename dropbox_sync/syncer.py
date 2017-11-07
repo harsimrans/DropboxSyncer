@@ -108,11 +108,7 @@ def dropbox_changes(dbx, old_cursor, folder, db_folder):
                             f.write(res)
                             f.close();
                     else:
-                        with open(file_path, "rb") as f:
-                            try:
-                                dbx.files_upload(f.read(), e.path_display, mute=True)
-                            except dropbox.exceptions.ApiError as e:
-                                print("Cannot upload file: ", f, " Error: ", str(e))
+                        upload_file(dbx, file_path, e.path_display)
                 else:
                     # download the file
                     try:
@@ -159,6 +155,42 @@ def download_file(dbx, path):
     print(len(data), 'bytes; md:', md)
     return data
 
+def upload_file(dbx, file_path, path):
+    """ 
+    file_path is the file to upload
+    path is the path on dropbox to upload to
+    """
+    f = open(file_path)
+    file_size = os.path.getsize(file_path)
+
+    CHUNK_SIZE = 4 * 1024 * 1024
+
+    if file_size <= CHUNK_SIZE:
+        try:
+            print(dbx.files_upload(f, path))
+        except:
+            print("Error uploading file: ", file_path)
+
+    else:
+        try:
+            upload_session_start_result = dbx.files_upload_session_start(f.read(CHUNK_SIZE))
+            cursor = dropbox.files.UploadSessionCursor(session_id=upload_session_start_result.session_id,
+                                                       offset=f.tell())
+            commit = dropbox.files.CommitInfo(path=path)
+
+            while f.tell() < file_size:
+                if ((file_size - f.tell()) <= CHUNK_SIZE):
+                    print(dbx.files_upload_session_finish(f.read(CHUNK_SIZE),
+                                                    cursor,
+                                                    commit))
+                else:
+                    dbx.files_upload_session_append(f.read(CHUNK_SIZE),
+                                                    cursor.session_id,
+                                                    cursor.offset)
+                    cursor.offset = f.tell()
+        except:
+            print("Error uploading file: ", file_path)
+
 def client_changes(dbx, diff1, diff2, folder, db_folder):
     print("client changes")
     # just the newly added files
@@ -169,14 +201,11 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
     for f in diffs['created']:
         file_name = f
         file_path = os.path.join(folder, str(file_name))
-        with open(file_path, 'rb') as file:
-            dp_path = db_folder + "/" + str(file_name)
-            print("path dbx: ", dp_path)
-            try:
-                dbx.files_upload(file.read(), dp_path , mute=True)
-            except dropbox.exceptions.ApiError as e:
-                print("Cannot upload file: ", f, " Error: ", str(e))
-        changes = True
+        dp_path = db_folder + "/" + str(file_name)
+        print("path dbx: ", dp_path)
+        
+        upload_file(dbx, file_path, dp_path)
+
 
     for f in diffs['deleted']:
         print("deleted: ", f)
@@ -237,7 +266,6 @@ def upload_folder(dbx, folder,db_folder):
             except Exception as e:
                 print("Failed to upload %s" % (file_name))
     print("Done.")
-
 
 
 def main():
