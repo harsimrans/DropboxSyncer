@@ -10,6 +10,7 @@ import unicodedata
 import dropbox
 import time
 import shutil
+import threading
 
 from argparse import ArgumentParser
 
@@ -223,8 +224,11 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
         file_path = os.path.join(folder, str(file_name))
         dp_path = db_folder + "/" + str(file_name)
         print("path dbx: ", dp_path)
-        
-        upload_file(dbx, file_path, dp_path)
+        print("push uploading to new thread...")
+        t = threading.Thread(target=upload_file, name="uploading_thread", args=(dbx, file_path, dp_path))
+        #upload_file(dbx, file_path, db_folder + "/" + f)
+        t.daemon = True
+        t.start()
 
 
     for f in diffs['deleted']:
@@ -246,16 +250,13 @@ def client_changes(dbx, diff1, diff2, folder, db_folder):
     for f in diffs['updated']:
         print("updated: ", f) 
         file_path = folder + "/" + f
-        # with open(file_path, "rb") as fname:
-        #     try:
-        #         if exists(dbx, db_folder + "/" + f):
-        #             dbx.files_upload(fname.read(), db_folder + "/" + f, mode=dropbox.files.WriteMode.overwrite, mute=True)
-        #         else:
-        #             dbx.files_upload(fname.read(), db_folder + "/" + f, mute=True)
 
-        #     except dropbox.exceptions.ApiError as e:
-        #         print("Cannot upload file: ", f, " Error: ", str(e))
-        upload_file(dbx, file_path, db_folder + "/" + f)
+        print("push uploading to new thread...")
+        t = threading.Thread(target=upload_file, name="uploading_thread", args=(dbx, file_path, db_folder + "/" + f))
+        #upload_file(dbx, file_path, db_folder + "/" + f)
+        t.daemon = True
+        t.start()
+        
         changes = True
     return changes
 
@@ -310,6 +311,7 @@ def download_folder(dbx, folder, db_folder):
             pass
 
 def initial_check(dbx, folder, db_folder):
+    print("Initial check and syncing...")
     db_folder_exists = check_folder_exists(dbx, db_folder)
     local_folder_exists = os.path.exists(folder)
 
@@ -416,6 +418,7 @@ def initial_check(dbx, folder, db_folder):
             else:
                 print("No Change {}".format(file_name))
                 pass
+    print("Initial check and syncing complete....")
 
 def main():
     parser = ArgumentParser()
