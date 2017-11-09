@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from __future__ import print_function
+from __future__ import absolute_import, division, print_function, unicode_literals
 
 import contextlib
 import datetime
@@ -13,6 +13,7 @@ import shutil
 import threading
 
 from argparse import ArgumentParser
+from dropbox_content_hasher import DropboxContentHasher
 
 def read_access_token(token_file='.dbsync_access_token_file'):
     """ Extracts the access token from an external file 
@@ -55,23 +56,36 @@ def compute_dir_index(path):
 
 def compute_dbdir_index(dbx, db_folder):
     # print(db_folder)
-    content = dbx.files_list_folder(db_folder, recursive=True)
+    content = dbx.files_list_folder(db_folder, recursive = True)
 
     files = []
     subdirs = []
     index = {}
+    content_hash = {}
     for entry in content.entries:
+        # print(entry)
         if type(entry) == dropbox.files.FileMetadata:
             file_name = entry.path_display[len(db_folder) + 1:]
             files.append(file_name)
             index[file_name] = entry.server_modified
+            content_hash[file_name] = entry.content_hash
         elif type(entry) == dropbox.files.FolderMetadata:
             folder_name = entry.path_display[len(db_folder) + 1:]
             
             if folder_name != '':
                 # print(folder_name)
                 subdirs.append(folder_name)
-    return dict(files=files, subdirs=subdirs, index=index)
+    return dict(files=files, subdirs=subdirs, index=index, content_hash=content_hash)
+
+def compute_content_hash(file_path):
+    hasher = DropboxContentHasher()
+    with open(file_path, 'rb') as f:
+        while True:
+            chunk = f.read(1024)  # or whatever chunk size you want
+            if len(chunk) == 0:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 def compute_diff(dir_base, dir_cmp):
     data = {}
@@ -167,6 +181,7 @@ def exists(dbx, path):
         return False
 
 def download_file(dbx, path):
+    '''Downloads a file from dropbox into a buffer and returns the buffer.'''
     try:
         md, res = dbx.files_download(path)
     except dropbox.exceptions.HttpError as err:
@@ -306,12 +321,39 @@ def download_folder(dbx, folder, db_folder):
                 print("Cannot download file: ", f, " Error: ", str(e))
             with open(f_path, 'wb') as f:
                 f.write(res)
-                f.close();
         else:
             pass
 
+def write_file(dbx, file_path, dest_path):
+    '''Writes file downloaded from dropbox on the local machine.'''
+    file_name = file_path.split("/")[-1]
+    try:
+        res = download_file(dbx, file_path)
+    except dropbox.exceptions.ApiError as e:
+        print("Cannot download file: ", file_name, " Error: ", str(e))
+    with open(dest_path, 'wb') as f:
+        f.write(res)
+        f.close();
+
 def initial_check(dbx, folder, db_folder):
     print("Initial check and syncing...")
+    log_file = os.path.expanduser("~") + "/." + folder.split("/")[-1] + "_sync"   
+    # print(log_file)
+    timestamp_exists = False
+    try:
+        with open(log_file, 'r') as f:
+            timestamp = f.read()
+        try :
+            timestamp = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+            timestamp_exists = True
+        except Exception as e:
+            pass
+    except IOError:
+        with open(log_file, 'w') as f:
+            current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # print(current_time)
+            f.write(current_time)
+
     db_folder_exists = check_folder_exists(dbx, db_folder)
     local_folder_exists = os.path.exists(folder)
 
@@ -331,50 +373,50 @@ def initial_check(dbx, folder, db_folder):
         #Download files that exist on dropbox but not locally
         file_diff = list(set(content['files']) - set(dir_id['files']))
         for file_name in file_diff:
-            f_path = folder + "/" + file_name
-            print("Downloading {}".format(file_name))
-            if os.path.exists("/".join(str(f_path).split("/")[:-1])) == True:
-                try:
-                    res = download_file(dbx, db_folder + "/" + file_name)
-                except dropbox.exceptions.ApiError as e:
-                    print("Cannot download file: ", f, " Error: ", str(e))
-                with open(f_path, 'wb') as f:
-                    f.write(res)
-                    f.close();
+            db_time = content['index'][file_name]
+            file_path = db_folder + "/" + file_name
+            dest_path = folder + "/" + file_name
+            # print(db_time)
+            if timestamp_exists == False or timestamp <= db_time:
+                print("Downloading {}".format(file_name))
+                if os.path.exists("/".join(str(dest_path).split("/")[:-1])) == True:
+                    write_file(dbx, file_path, dest_path)
+                else:
+                    print("no folder")
+                    os.makedirs("/".join(str(dest_path).split("/")[:-1]))
+                    write_file(dbx, file_path, dest_path)
             else:
-                print("no folder")
-                os.makedirs("/".join(str(f_path).split("/")[:-1]))
+                print("Deleting from dropbox: ", file_name)
                 try:
-                    res = download_file(dbx, db_folder + "/" + file_name)
+                    dbx.files_delete(file_path)
                 except dropbox.exceptions.ApiError as e:
-                    print("Cannot download file: ", f, " Error: ", str(e))
-                with open(f_path, 'wb') as f:
-                    f.write(res)
-                    f.close();
+                    print("Cannot delete file: ", file_name, " Error: ", str(e))
 
         #Upload files that exist locally but not on dropbox
         file_diff = list(set(dir_id['files']) - set(content['files']))
         for file_name in file_diff:
-            print("Uploading {}".format(file_name))
-            f_path = db_folder + "/" + file_name
-            if check_folder_exists(dbx, "/".join(str(f_path).split("/")[:-1])) == True:
-                try: 
-                    file_path = folder + "/" + file_name
-                    dest_path = f_path
-                    with open(file_path, "rb") as f:
-                        dbx.files_upload(f.read(), dest_path, mute=True)
-                except Exception as e:
-                    print("Failed to upload %s" % (file_name))
+            # db_time = content['index'][file_name]
+            local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(dir_id['index'][file_name])))
+            local_time = datetime.datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
+            file_path = folder + "/" + file_name
+            dest_path = db_folder + "/" + file_name
+
+            # print(local_time)
+            if timestamp_exists == False or timestamp <= local_time: 
+                print("Uploading {}".format(file_name))
+                if check_folder_exists(dbx, "/".join(str(dest_path).split("/")[:-1])) == True:
+                    upload_file(dbx, file_path, dest_path)
+                else:
+                    dbx.files_create_folder(path="/".join(str(dest_path).split("/")[:-1]))
+                    upload_file(dbx, file_path, dest_path)
             else:
-                print("no folder")
-                dbx.files_create_folder(path="/".join(str(f_path).split("/")[:-1]))
-                try: 
-                    file_path = folder + "/" + file_name
-                    dest_path = f_path
-                    with open(file_path, "rb") as f:
-                        dbx.files_upload(f.read(), dest_path, mute=True)
+                print("Deleting from local folder: ", file_name)
+                try:
+                    os.remove(file_path)
                 except Exception as e:
-                    print("Failed to upload %s" % (file_name))
+                    print("Cannot delete file: ", file_name, "Error : ", str(e))
+
+
 
         #For files that exist on both, keep the latest copy of the files on both
         file_intersect = list(set(content['files']).intersection(set(dir_id['files'])))
@@ -383,42 +425,25 @@ def initial_check(dbx, folder, db_folder):
             local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(dir_id['index'][file_name])))
             local_time = datetime.datetime.strptime(local_time, '%Y-%m-%d %H:%M:%S')
             f_path = folder + "/" + file_name
-            if db_time > local_time:
-                # print("Downloading")
-                try:
-                    res = download_file(dbx, db_folder + "/" + file_name)
-                except dropbox.exceptions.ApiError as e:
-                    print("Cannot download file: ", f, " Error: ", str(e))
-                with open(f_path) as f:
-                        data = f.read()
-                if res == data:
-                   print(file_name, 'is already synced [content match]')
+
+            #If the hash matches then the file hasn't changed.
+            if compute_content_hash(f_path) == content['content_hash'][file_name]:
+                print("{} [content match]".format(file_name))
+            else: #Download or upload the file based on the latest timestamp.
+                if db_time > local_time:
+                    # print("download needed")
+                    file_path = db_folder + "/" + file_name
+                    dest_path = folder + "/" + file_name
+                    print("Downloading {}".format(file_name))
+                    write_file(dbx, file_path, dest_path)
                 else:
-                    with open(f_path, 'wb') as f:
-                        f.write(res)
-                        f.close();
-            elif local_time > db_time:
-                # print("Uploading")
-                try: 
+                    # print("upload needed")
                     file_path = folder + "/" + file_name
                     dest_path = db_folder + "/" + file_name
-                    try:
-                        res = download_file(dbx, dest_path)
-                    except dropbox.exceptions.ApiError as e:
-                        print("Cannot download file: ", f, " Error: ", str(e))
-                    with open(file_path) as f:
-                            data = f.read()
-                    if res == data:
-                       print(file_name, 'is already synced [content match]')
-                    else:
-                        with open(file_path, "rb") as f:
-                            dbx.files_upload(f.read(), dest_path, mute=True)
-                except Exception as e:
-                    print("Failed to upload %s" % (file_name))
-            else:
-                print("No Change {}".format(file_name))
-                pass
-    print("Initial check and syncing complete....")
+                    print("Uploading {}".format(file_name))
+                    upload_file(dbx, file_path, dest_path)
+
+    return log_file
 
 def main():
     parser = ArgumentParser()
@@ -434,7 +459,7 @@ def main():
     folder = os.path.abspath(folder)
     db_folder = "/" + os.path.abspath(folder).split("/")[-1]
 
-    initial_check(dbx, folder, db_folder)
+    log_file = initial_check(dbx, folder, db_folder)
 
     cursor = get_current_cursor(dbx, db_folder)
     dir_id = compute_dir_index(folder)
@@ -454,11 +479,16 @@ def main():
                 # we have updates dropbox get new snapshot
                 cursor = get_current_cursor(dbx, db_folder)
             dir_id = curr_dir_id
+            try:
+                with open(log_file, 'w') as f:
+                    current_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    f.write(current_time)
+            except:
+                continue
             time.sleep(1)
     except KeyboardInterrupt:
         print("Exiting")
         sys.exit()
 
-### TODO: store the cursor and exit and use that initially as old cursor
 if __name__=="__main__":
     main()
