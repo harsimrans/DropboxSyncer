@@ -12,8 +12,10 @@ import time
 import shutil
 import threading
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from argparse import ArgumentParser
-from dropbox_content_hasher import DropboxContentHasher
+from utils.dropbox_content_hasher import DropboxContentHasher
 
 def read_access_token(token_file='.dbsync_access_token_file'):
     """ Extracts the access token from an external file 

@@ -1,5 +1,5 @@
 import pytest
-import syncer
+from dropbox_sync import syncer
 import pyfakefs.fake_filesystem as fake_fs
 import os
 
