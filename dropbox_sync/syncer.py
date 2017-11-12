@@ -31,9 +31,6 @@ def read_access_token(token_file='.dbsync_access_token_file'):
         return False
         sys.exit()
 
-# OAuth2 access token.
-TOKEN = read_access_token()
-
 def compute_dir_index(path):
     """ Return a tuple containing:
     - list of files (relative to path)
@@ -454,6 +451,9 @@ def main():
 
     args, other_args = parser.parse_known_args()
 
+    # OAuth2 access token.
+    TOKEN = read_access_token()
+    
     # create a dropbox client instance
     dbx = dropbox.Dropbox(TOKEN)
     folder = args.folder
