@@ -1,5 +1,6 @@
-import pytest
+from __future__ import print_function
 from dropbox_sync import syncer
+import pytest
 import pyfakefs.fake_filesystem as fake_fs
 import os
 
@@ -10,17 +11,24 @@ def test_read_access_token():
 def test_compute_dir_index(fs):
 	files = ["/abc/def.txt", "/abc/efg.png", "/abc/hgf.pdf", "/something.txt"]
 	directories = ["abc/har", "bcd", "/def"]
+	## /var folder happens to be appearing on Mac OS with pyfake
+	## HACK: check if present remove it. FIGURE OUT WHY !! FIX IT !!!!
+	if os.path.exists("/var"):
+		fs.RemoveObject("/var")
+
+	# for root, dirs, filenames in os.walk("/"):
+	# 	print(root, dirs, filenames) 
 	for entry in directories:
 		fs.CreateDirectory(entry)
 	for entry in files:
 		fs.CreateFile(entry)
 	
-	##for root, dirs, filenames in os.walk("/"):
-	##	print root, dirs, filenames 
+	for root, dirs, filenames in os.walk("/"):
+		print(root, dirs, filenames) 
 	
 	d = syncer.compute_dir_index("/")	
 	
-	print d['files'], d['subdirs']
+	print(d['files'], d['subdirs'])
 	assert(len(d['files']) == 4)
 	assert(len(d['subdirs']) == 4)
 
