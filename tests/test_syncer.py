@@ -12,12 +12,13 @@ def test_compute_dir_index(fs):
 	files = ["/abc/def.txt", "/abc/efg.png", "/abc/hgf.pdf", "/something.txt"]
 	directories = ["abc/har", "bcd", "/def"]
 	## /var folder happens to be appearing on Mac OS with pyfake
-	## HACK: check if present remove it. FIGURE OUT WHY !! FIX IT !!!!
-	if os.path.exists("/var"):
-		fs.RemoveObject("/var")
+	## HACK: make sure Filesystem is clean by removing folders
 
-	# for root, dirs, filenames in os.walk("/"):
-	# 	print(root, dirs, filenames) 
+	for root, dirs, filenames in os.walk("/"):
+	 	for d in dirs:
+	 		fs.RemoveObject(os.path.join(root, d))
+	 	print(root, dirs, filenames) 
+	
 	for entry in directories:
 		fs.CreateDirectory(entry)
 	for entry in files:
