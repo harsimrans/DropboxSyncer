@@ -195,7 +195,7 @@ def upload_file(dbx, file_path, path):
     file_path is the file to upload
     path is the path on dropbox to upload to
     """
-    f = open(file_path)
+    f = open(file_path, 'rb')
     file_size = os.path.getsize(file_path)
 
     CHUNK_SIZE = 4 * 1024 * 1024
@@ -203,8 +203,9 @@ def upload_file(dbx, file_path, path):
     if file_size <= CHUNK_SIZE:
         try:
             print(dbx.files_upload(f.read(), path, mode=dropbox.files.WriteMode.overwrite))
-        except:
+        except Exception as e:
             print("Error uploading file: ", file_path)
+            print("Error: " + e)
 
     else:
         try:
